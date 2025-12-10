@@ -3,8 +3,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Callable, Generator, Iterable
 
-import aiofiles
-import aiofiles.os as aios
+import anyio
 from loguru import logger
 
 from exo.shared.types.worker.shards import ShardMetadata
@@ -69,9 +68,9 @@ def get_hf_home() -> Path:
 
 async def get_hf_token() -> str | None:
     """Retrieve the Hugging Face token from the user's HF_HOME directory."""
-    token_path = get_hf_home() / "token"
-    if await aios.path.exists(token_path):
-        async with aiofiles.open(token_path, "r") as f:
+    token_path = anyio.Path(get_hf_home() / "token")
+    if await token_path.exists():
+        async with await anyio.open_file(token_path, "r") as f:
             return (await f.read()).strip()
     return None
 

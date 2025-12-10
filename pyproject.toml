@@ -5,31 +5,16 @@ description = "Exo"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "aiofiles>=24.1.0",
-    "aiohttp>=3.12.14",
-    "types-aiofiles>=24.1.0.20250708",
-    "typeguard>=4.4.4",
     "pydantic>=2.11.7",
-    "base58>=2.1.1",
-    "cryptography>=45.0.5",
+    "httpx>=0.28.1",
     "fastapi>=0.116.1",
     "filelock>=3.18.0",
-    "aiosqlite>=0.21.0",
-    "networkx>=3.5",
-    "pathlib>=1.0.1",
-    "protobuf>=6.32.0",
-    "rich>=14.1.0",
     "rustworkx>=0.17.1",
-    "sqlmodel>=0.0.24",
-    "sqlalchemy[asyncio]>=2.0.43",
-    "greenlet>=3.2.4",
     "huggingface-hub>=0.33.4",
     "psutil>=7.0.0",
     "loguru>=0.7.3",
-    "textual>=5.3.0",
     "exo_pyo3_bindings", # rust bindings
     "anyio==4.11.0",
-    "bidict>=0.23.1",
     "mlx>=0.29.3",
     "mlx-lm>=0.28.3",
     "tiktoken>=0.12.0", # required for kimi k2 tokenizer
@@ -45,9 +30,8 @@ exo = "exo.main:main"
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",
-    "pytest-asyncio>=1.0.0",
-    "pytest-env",
     "ruff>=0.11.13",
+    "trio>=0.32.0",
 ]
 
 # mlx[cuda] requires a newer version of mlx. the ideal on linux is: default to mlx[cpu] unless[cuda] specified.
@@ -124,12 +108,4 @@ extend-exclude = ["shared/protobufs/**", "*mlx_typings/**", "rust/exo_pyo3_bindi
 extend-select = ["I", "N", "B", "A", "PIE", "SIM"]
 
 [tool.pytest.ini_options]
-pythonpath = "."
-asyncio_mode = "auto"
-markers = [
-    "slow: marks tests as slow (deselected by default)"
-]
-env = [
-  "EXO_TESTS=1"
-]
-addopts = "-m 'not slow'"
+anyio_mode = "auto"

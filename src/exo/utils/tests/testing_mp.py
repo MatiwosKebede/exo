@@ -1,7 +1,6 @@
 import multiprocessing as mp
 import time
 
-import pytest
 from anyio import fail_after
 from loguru import logger
 
@@ -29,7 +28,6 @@ def bar(send: MpSender[str]):
 
 
 # not async, just want the fail_after
-@pytest.mark.anyio
 async def test_channel_setup():
     with fail_after(0.5):
         s, r = mp_channel[str]()

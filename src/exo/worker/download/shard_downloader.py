@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import timedelta
-from pathlib import Path
 from typing import AsyncIterator, Callable
+
+from anyio import Path
 
 from exo.shared.types.memory import Memory
 from exo.shared.types.models import ModelId, ModelMetadata
@@ -9,7 +11,15 @@ from exo.shared.types.worker.shards import (
     PipelineShardMetadata,
     ShardMetadata,
 )
+from exo.utils.channels import Sender
 from exo.worker.download.download_utils import RepoDownloadProgress
+
+
+@dataclass
+class ShardDownloader2:
+    progress_sender: Sender[RepoDownloadProgress]
+
+    def queue_shard(self, shard: ShardMetadata, config_only: bool = False): ...
 
 
 # TODO: the PipelineShardMetadata getting reinstantiated is a bit messy. Shoudl this be a classmethod?

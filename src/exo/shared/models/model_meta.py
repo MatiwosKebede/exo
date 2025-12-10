@@ -1,7 +1,5 @@
 from typing import Annotated
 
-import aiofiles
-import aiofiles.os as aios
 from huggingface_hub import model_info
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -50,7 +48,7 @@ class ConfigData(BaseModel):
 async def get_config_data(model_id: str) -> ConfigData:
     """Downloads and parses config.json for a model."""
     target_dir = (await ensure_models_dir()) / str(model_id).replace("/", "--")
-    await aios.makedirs(target_dir, exist_ok=True)
+    await target_dir.mkdir(parents=True, exist_ok=True)
     config_path = await download_file_with_retry(
         model_id,
         "main",
@@ -60,14 +58,14 @@ async def get_config_data(model_id: str) -> ConfigData:
             f"Downloading config.json for {model_id}: {curr_bytes}/{total_bytes} ({is_renamed=})"
         ),
     )
-    async with aiofiles.open(config_path, "r") as f:
+    async with await config_path.open("r") as f:
         return ConfigData.model_validate_json(await f.read())
 
 
 async def get_safetensors_size(model_id: str) -> Memory:
     """Gets model size from safetensors index or falls back to HF API."""
     target_dir = (await ensure_models_dir()) / str(model_id).replace("/", "--")
-    await aios.makedirs(target_dir, exist_ok=True)
+    await target_dir.mkdir(parents=True, exist_ok=True)
     index_path = await download_file_with_retry(
         model_id,
         "main",
@@ -77,7 +75,7 @@ async def get_safetensors_size(model_id: str) -> Memory:
             f"Downloading model.safetensors.index.json for {model_id}: {curr_bytes}/{total_bytes} ({is_renamed=})"
         ),
     )
-    async with aiofiles.open(index_path, "r") as f:
+    async with await index_path.open("r") as f:
         index_data = ModelSafetensorsIndex.model_validate_json(await f.read())
 
     metadata = index_data.metadata

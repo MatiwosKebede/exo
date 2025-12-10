@@ -235,7 +235,6 @@ class L1C(TaggedModel):
 L1 = L1A | L1B | L1C
 
 
-@pytest.mark.anyio
 async def test_tagged_union_is_fast():
     # payload along the "C" path (worst case for DFS if branches are tried A->B->C)
     payload = {"L1C": {"child": {"L2C": {"child": {"L3C": {"x": 123}}}}}}

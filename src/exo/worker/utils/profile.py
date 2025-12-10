@@ -1,4 +1,3 @@
-import asyncio
 import os
 import platform
 from typing import Any, Callable, Coroutine
@@ -103,10 +102,6 @@ async def start_polling_node_metrics(
                 )
             )
 
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[resource_monitor] Operation timed out after 30s, skipping this cycle."
-            )
         except MacMonError as e:
             logger.opt(exception=e).error("Resource Monitor encountered error")
         finally:

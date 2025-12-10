@@ -1,17 +1,15 @@
-import asyncio
 import hashlib
 import os
 import shutil
 import time
 import traceback
 from datetime import timedelta
-from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Literal, cast
 from urllib.parse import urljoin
 
-import aiofiles
-import aiofiles.os as aios
-import aiohttp
+import anyio
+import httpx
+from anyio import Path, to_thread
 from loguru import logger
 from pydantic import (
     BaseModel,
@@ -131,34 +129,36 @@ async def resolve_model_path_for_repo(repo_id: str) -> Path:
 
 
 async def ensure_exo_home() -> Path:
-    await aios.makedirs(EXO_HOME, exist_ok=True)
-    return EXO_HOME
+    home = Path(EXO_HOME)
+    await home.mkdir(parents=True, exist_ok=True)
+    return home
 
 
 async def has_exo_home_read_access() -> bool:
     try:
-        return await aios.access(EXO_HOME, os.R_OK)
+        return await to_thread.run_sync(os.access, EXO_HOME, os.R_OK)
     except OSError:
         return False
 
 
 async def has_exo_home_write_access() -> bool:
     try:
-        return await aios.access(EXO_HOME, os.W_OK)
+        return await to_thread.run_sync(os.access, EXO_HOME, os.W_OK)
     except OSError:
         return False
 
 
 async def ensure_models_dir() -> Path:
-    await aios.makedirs(EXO_MODELS_DIR, exist_ok=True)
-    return EXO_MODELS_DIR
+    models_dir = Path(EXO_MODELS_DIR)
+    await models_dir.mkdir(parents=True, exist_ok=True)
+    return models_dir
 
 
 async def delete_model(repo_id: str) -> bool:
     model_dir = await ensure_models_dir() / repo_id.replace("/", "--")
-    if not await aios.path.exists(model_dir):
+    if not await model_dir.exists():
         return False
-    await asyncio.to_thread(shutil.rmtree, model_dir, ignore_errors=False)
+    await to_thread.run_sync(shutil.rmtree, model_dir)
     return True
 
 
@@ -166,14 +166,14 @@ async def seed_models(seed_dir: str | Path):
     """Move model in resources folder of app to .cache/huggingface/hub"""
     source_dir = Path(seed_dir)
     dest_dir = await ensure_models_dir()
-    for path in source_dir.iterdir():
-        if path.is_dir() and path.name.startswith("models--"):
+    async for path in source_dir.iterdir():
+        if await path.is_dir() and path.name.startswith("models--"):
             dest_path = dest_dir / path.name
-            if await aios.path.exists(dest_path):
+            if await dest_path.exists():
                 logger.info("Skipping moving model to .cache directory")
             else:
                 try:
-                    await aios.rename(str(path), str(dest_path))
+                    await path.rename(dest_path)
                 except Exception:
                     logger.error(f"Error seeding model {path} to {dest_path}")
                     logger.error(traceback.format_exc())
@@ -185,16 +185,16 @@ async def fetch_file_list_with_cache(
     target_dir = (
         (await ensure_models_dir()) / "caches" / str(repo_id).replace("/", "--")
     )
-    await aios.makedirs(target_dir, exist_ok=True)
+    await target_dir.mkdir(parents=True, exist_ok=True)
     cache_file = (
         target_dir / f"{repo_id.replace('/', '--')}--{revision}--file_list.json"
     )
-    if await aios.path.exists(cache_file):
-        async with aiofiles.open(cache_file, "r") as f:
+    if await cache_file.exists():
+        async with await cache_file.open("r") as f:
             return TypeAdapter(list[FileListEntry]).validate_json(await f.read())
     file_list = await fetch_file_list_with_retry(repo_id, revision, recursive=recursive)
-    await aios.makedirs(cache_file.parent, exist_ok=True)
-    async with aiofiles.open(cache_file, "w") as f:
+    await cache_file.parent.mkdir(parents=True, exist_ok=True)
+    async with await cache_file.open("w") as f:
         await f.write(TypeAdapter(list[FileListEntry]).dump_json(file_list).decode())
     return file_list
 
@@ -209,7 +209,7 @@ async def fetch_file_list_with_retry(
         except Exception as e:
             if attempt == n_attempts - 1:
                 raise e
-            await asyncio.sleep(min(8, 0.1 * float(2.0 ** int(attempt))))
+            await anyio.sleep(min(8, 0.1 * float(2.0 ** int(attempt))))
     raise Exception(
         f"Failed to fetch file list for {repo_id=} {revision=} {path=} {recursive=}"
     )
@@ -223,62 +223,55 @@ async def _fetch_file_list(
 
     headers = await get_download_headers()
     async with (
-        create_http_session(timeout_profile="short") as session,
-        session.get(url, headers=headers) as response,
+        create_http_client(timeout_profile="short") as client,
     ):
-        if response.status == 200:
-            data_json = await response.text()
-            data = TypeAdapter(list[FileListEntry]).validate_json(data_json)
-            files: list[FileListEntry] = []
-            for item in data:
-                if item.type == "file":
-                    files.append(FileListEntry.model_validate(item))
-                elif item.type == "directory" and recursive:
-                    subfiles = await _fetch_file_list(
-                        repo_id, revision, item.path, recursive
-                    )
-                    files.extend(subfiles)
-            return files
-        else:
-            raise Exception(f"Failed to fetch file list: {response.status}")
+        response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Failed to fetch file list: {response.status_code}")
+        data = TypeAdapter(list[FileListEntry]).validate_json(response.text)
+        files: list[FileListEntry] = []
+        for item in data:
+            if item.type == "file":
+                files.append(FileListEntry.model_validate(item))
+            elif item.type == "directory" and recursive:
+                subfiles = await _fetch_file_list(
+                    repo_id, revision, item.path, recursive
+                )
+                files.extend(subfiles)
+        return files
 
 
 async def get_download_headers() -> dict[str, str]:
     return {**(await get_auth_headers()), "Accept-Encoding": "identity"}
 
 
-def create_http_session(
-    auto_decompress: bool = False,
+def create_http_client(
     timeout_profile: Literal["short", "long"] = "long",
-) -> aiohttp.ClientSession:
+) -> httpx.AsyncClient:
     if timeout_profile == "short":
-        total_timeout = 30
-        connect_timeout = 10
-        sock_read_timeout = 30
-        sock_connect_timeout = 10
+        timeout = httpx.Timeout(
+            connect=10,
+            read=30,
+            write=30,
+            pool=30,
+        )
     else:
-        total_timeout = 1800
-        connect_timeout = 60
-        sock_read_timeout = 1800
-        sock_connect_timeout = 60
+        timeout = httpx.Timeout(
+            connect=60,
+            read=1800,
+            write=1800,
+            pool=1800,
+        )
 
-    return aiohttp.ClientSession(
-        auto_decompress=auto_decompress,
-        timeout=aiohttp.ClientTimeout(
-            total=total_timeout,
-            connect=connect_timeout,
-            sock_read=sock_read_timeout,
-            sock_connect=sock_connect_timeout,
-        ),
-    )
+    return httpx.AsyncClient(timeout=timeout)
 
 
 async def calc_hash(path: Path, hash_type: Literal["sha1", "sha256"] = "sha1") -> str:
     hasher = hashlib.sha1() if hash_type == "sha1" else hashlib.sha256()
     if hash_type == "sha1":
-        header = f"blob {(await aios.stat(path)).st_size}\0".encode()
+        header = f"blob {(await path.stat()).st_size}\0".encode()
         hasher.update(header)
-    async with aiofiles.open(path, "rb") as f:
+    async with await path.open("rb") as f:
         while chunk := await f.read(8 * 1024 * 1024):
             hasher.update(chunk)
     return hasher.hexdigest()
@@ -294,24 +287,28 @@ async def file_meta(
     )
     headers = await get_download_headers()
     async with (
-        create_http_session(timeout_profile="short") as session,
-        session.head(url, headers=headers) as r,
+        create_http_client(timeout_profile="short") as client,
     ):
-        if r.status == 307:
+        r = await client.head(url, headers=headers)
+        if r.status_code == 307:
             # On redirect, only trust Hugging Face's x-linked-* headers.
-            x_linked_size = r.headers.get("x-linked-size")
-            x_linked_etag = r.headers.get("x-linked-etag")
-            if x_linked_size and x_linked_etag:
-                content_length = int(x_linked_size)
-                etag = trim_etag(x_linked_etag)
+            if "x-linked-size" in r.headers and "x-linked-etag" in r.headers:
+                content_length = int(r.headers["x-linked-size"])
+                etag = trim_etag(r.headers["x-linked-etag"])
                 return content_length, etag
             # Otherwise, follow the redirect to get authoritative size/hash
-            redirected_location = r.headers.get("location")
+            redirected_location = r.headers["location"]
             return await file_meta(repo_id, revision, path, redirected_location)
+        # this can totally fail in weird ways if the HF endpoint behaves weirdly
         content_length = int(
-            r.headers.get("x-linked-size") or r.headers.get("content-length") or 0
+            r.headers.get("x-linked-size", None)
+            or r.headers.get("content-length", None)
+            or 0
         )
-        etag = r.headers.get("x-linked-etag") or r.headers.get("etag")
+        etag = cast(
+            str | None,
+            r.headers.get("x-linked-etag", None) or r.headers.get("etag", None),
+        )
         assert content_length > 0, f"No content length for {url}"
         assert etag is not None, f"No remote hash for {url}"
         etag = trim_etag(etag)
@@ -338,7 +335,7 @@ async def download_file_with_retry(
                 f"Download error on attempt {attempt}/{n_attempts} for {repo_id=} {revision=} {path=} {target_dir=}"
             )
             logger.error(traceback.format_exc())
-            await asyncio.sleep(min(8, 0.1 * (2.0**attempt)))
+            await anyio.sleep(min(8, 0.1 * (2.0**attempt)))
     raise Exception(
         f"Failed to download file {repo_id=} {revision=} {path=} {target_dir=}"
     )
@@ -351,16 +348,14 @@ async def _download_file(
     target_dir: Path,
     on_progress: Callable[[int, int, bool], None] = lambda _, __, ___: None,
 ) -> Path:
-    if await aios.path.exists(target_dir / path):
+    if await (target_dir / path).exists():
         return target_dir / path
-    await aios.makedirs((target_dir / path).parent, exist_ok=True)
+    await ((target_dir / path).parent).mkdir(parents=True, exist_ok=True)
     length, etag = await file_meta(repo_id, revision, path)
     remote_hash = etag[:-5] if etag.endswith("-gzip") else etag
     partial_path = target_dir / f"{path}.partial"
     resume_byte_pos = (
-        (await aios.stat(partial_path)).st_size
-        if (await aios.path.exists(partial_path))
-        else None
+        (await partial_path.stat()).st_size if (await partial_path.exists()) else None
     )
     if resume_byte_pos != length:
         url = urljoin(f"{get_hf_endpoint()}/{repo_id}/resolve/{revision}/", path)
@@ -369,18 +364,16 @@ async def _download_file(
             headers["Range"] = f"bytes={resume_byte_pos}-"
         n_read = resume_byte_pos or 0
         async with (
-            create_http_session(timeout_profile="long") as session,
-            session.get(url, headers=headers) as r,
+            create_http_client(timeout_profile="long") as client,
+            client.stream("GET", url, headers=headers) as r,
         ):
-            if r.status == 404:
+            if r.status_code == 404:
                 raise FileNotFoundError(f"File not found: {url}")
-            assert r.status in [200, 206], (
-                f"Failed to download {path} from {url}: {r.status}"
+            assert r.status_code in [200, 206], (
+                f"Failed to download {path} from {url}: {r.status_code}"
             )
-            async with aiofiles.open(
-                partial_path, "ab" if resume_byte_pos else "wb"
-            ) as f:
-                while chunk := await r.content.read(8 * 1024 * 1024):
+            async with await partial_path.open("ab" if resume_byte_pos else "wb") as f:
+                async for chunk in r.aiter_bytes(8 * 1024 * 1024):
                     n_read = n_read + (await f.write(chunk))
                     on_progress(n_read, length, False)
 
@@ -390,13 +383,13 @@ async def _download_file(
     integrity = final_hash == remote_hash
     if not integrity:
         try:
-            await aios.remove(partial_path)
+            await partial_path.unlink()
         except Exception as e:
             logger.error(f"Error removing partial file {partial_path}: {e}")
         raise Exception(
             f"Downloaded file {target_dir / path} has hash {final_hash} but remote hash is {remote_hash}"
         )
-    await aios.rename(partial_path, target_dir / path)
+    await partial_path.rename(target_dir / path)
     on_progress(length, length, True)
     return target_dir / path
 
@@ -453,11 +446,11 @@ def calculate_repo_progress(
 
 async def get_weight_map(repo_id: str, revision: str = "main") -> dict[str, str]:
     target_dir = (await ensure_models_dir()) / str(repo_id).replace("/", "--")
-    await aios.makedirs(target_dir, exist_ok=True)
+    await (target_dir).mkdir(parents=True, exist_ok=True)
     index_file = await download_file_with_retry(
         repo_id, revision, "model.safetensors.index.json", target_dir
     )
-    async with aiofiles.open(index_file, "r") as f:
+    async with await index_file.open("r") as f:
         index_data = ModelSafetensorsIndex.model_validate_json(await f.read())
     return index_data.weight_map
 
@@ -474,10 +467,10 @@ async def resolve_allow_patterns(shard: ShardMetadata) -> list[str]:
 
 async def get_downloaded_size(path: Path) -> int:
     partial_path = path.with_suffix(path.suffix + ".partial")
-    if await aios.path.exists(path):
-        return (await aios.stat(path)).st_size
-    if await aios.path.exists(partial_path):
-        return (await aios.stat(partial_path)).st_size
+    if await path.exists():
+        return (await path.stat()).st_size
+    if await partial_path.exists():
+        return (await partial_path.stat()).st_size
     return 0
 
 
@@ -488,12 +481,12 @@ async def download_progress_for_local_path(
     total_files = 0
     total_bytes = 0
 
-    if await aios.path.isdir(local_path):
+    if await local_path.is_dir():
         for root, _, files in os.walk(local_path):
             for f in files:
                 if f.endswith((".safetensors", ".bin", ".pt", ".gguf", ".json")):
                     file_path = Path(root) / f
-                    size = (await aios.stat(file_path)).st_size
+                    size = (await (file_path).stat()).st_size
                     rel_path = str(file_path.relative_to(local_path))
                     file_progress[rel_path] = RepoFileDownloadProgress(
                         repo_id=repo_id,
@@ -539,7 +532,7 @@ async def download_shard(
         logger.info(f"Downloading {shard.model_meta.model_id=}")
 
     # Handle local paths
-    if await aios.path.exists(str(shard.model_meta.model_id)):
+    if await Path(str(shard.model_meta.model_id)).exists():
         logger.info(f"Using local model path {shard.model_meta.model_id}")
         local_path = Path(str(shard.model_meta.model_id))
         return local_path, await download_progress_for_local_path(
@@ -551,7 +544,7 @@ async def download_shard(
         "/", "--"
     )
     if not skip_download:
-        await aios.makedirs(target_dir, exist_ok=True)
+        await target_dir.mkdir(parents=True, exist_ok=True)
 
     if not allow_patterns:
         allow_patterns = await resolve_allow_patterns(shard)
@@ -635,7 +628,7 @@ async def download_shard(
             start_time=time.time(),
         )
 
-    semaphore = asyncio.Semaphore(max_parallel_downloads)
+    semaphore = anyio.Semaphore(max_parallel_downloads)
 
     async def download_with_semaphore(file: FileListEntry):
         async with semaphore:
@@ -650,9 +643,10 @@ async def download_shard(
             )
 
     if not skip_download:
-        await asyncio.gather(
-            *[download_with_semaphore(file) for file in filtered_file_list]
-        )
+        async with anyio.create_task_group() as tg:
+            for file in filtered_file_list:
+                tg.start_soon(download_with_semaphore, file)
+
     final_repo_progress = calculate_repo_progress(
         shard, str(shard.model_meta.model_id), revision, file_progress, all_start_time
     )

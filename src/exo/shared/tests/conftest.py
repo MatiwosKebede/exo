@@ -1,8 +1,5 @@
 """Pytest configuration and shared fixtures for shared package tests."""
 
-import asyncio
-from typing import Generator
-
 import pytest
 from _pytest.logging import LogCaptureFixture
 from loguru import logger
@@ -10,21 +7,6 @@ from loguru import logger
 from exo.shared.types.memory import Memory
 from exo.shared.types.models import ModelId, ModelMetadata
 from exo.shared.types.worker.shards import PipelineShardMetadata, ShardMetadata
-
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create an event loop for the test session."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(autouse=True)
-def reset_event_loop():
-    """Reset the event loop for each test to ensure clean state."""
-    # This ensures each test gets a fresh event loop state
 
 
 def get_pipeline_shard_metadata(
@@ -52,7 +34,7 @@ def caplog(caplog: LogCaptureFixture):
         format="{message}",
         level=0,
         filter=lambda record: record["level"].no >= caplog.handler.level,
-        enqueue=True,  # Set to 'True' if your test is spawning child processes.
+        enqueue=True,
     )
     yield caplog
     logger.remove(handler_id)

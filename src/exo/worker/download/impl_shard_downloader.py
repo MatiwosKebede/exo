@@ -1,6 +1,7 @@
 import asyncio
-from pathlib import Path
 from typing import AsyncIterator, Callable
+
+from anyio import Path
 
 from exo.shared.models.model_cards import MODEL_CARDS
 from exo.shared.models.model_meta import get_model_meta

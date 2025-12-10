@@ -357,10 +357,11 @@ class Worker:
 
         # TODO: i hate callbacks
         def download_progress_callback(
-            shard: ShardMetadata, progress: RepoDownloadProgress
+            _: ShardMetadata, progress: RepoDownloadProgress
         ) -> None:
             nonlocal self
             nonlocal last_progress_time
+            shard = progress.shard
             if progress.status == "complete":
                 status = DownloadCompleted(shard_metadata=shard, node_id=self.node_id)
                 self.download_status[shard] = status

@@ -46,7 +46,6 @@ def fast_election_timeout(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("exo.shared.election.DEFAULT_ELECTION_TIMEOUT", 0.1)
 
 
-@pytest.mark.anyio
 async def test_single_round_broadcasts_and_updates_seniority_on_self_win() -> None:
     """
     Start a round by injecting an ElectionMessage with higher clock.
@@ -102,7 +101,6 @@ async def test_single_round_broadcasts_and_updates_seniority_on_self_win() -> No
     assert election.seniority == 2
 
 
-@pytest.mark.anyio
 async def test_peer_with_higher_seniority_wins_and_we_switch_master() -> None:
     """
     If a peer with clearly higher seniority participates in the round, they should win.
@@ -156,7 +154,6 @@ async def test_peer_with_higher_seniority_wins_and_we_switch_master() -> None:
     assert election.seniority == 0
 
 
-@pytest.mark.anyio
 async def test_ignores_older_messages() -> None:
     """
     Messages with a lower clock than the current round are ignored by the receiver.
@@ -205,7 +202,6 @@ async def test_ignores_older_messages() -> None:
     # Not asserting on the result; focus is on ignore behavior.
 
 
-@pytest.mark.anyio
 async def test_two_rounds_emit_two_broadcasts_and_increment_clock() -> None:
     """
     Two successive rounds → two broadcasts. Second round triggered by a higher-clock message.
@@ -251,7 +247,6 @@ async def test_two_rounds_emit_two_broadcasts_and_increment_clock() -> None:
     # Not asserting on who won; just that both rounds were broadcast.
 
 
-@pytest.mark.anyio
 async def test_promotion_new_seniority_counts_participants() -> None:
     """
     When we win against two peers in the same round, our seniority becomes
@@ -300,7 +295,6 @@ async def test_promotion_new_seniority_counts_participants() -> None:
     assert election.seniority == 3
 
 
-@pytest.mark.anyio
 async def test_connection_message_triggers_new_round_broadcast() -> None:
     """
     A connection message increments the clock and starts a new campaign.
@@ -352,7 +346,6 @@ async def test_connection_message_triggers_new_round_broadcast() -> None:
     # After cancellation (before election finishes), no seniority changes asserted here.
 
 
-@pytest.mark.anyio
 async def test_tie_breaker_prefers_node_with_more_commands_seen() -> None:
     """
     With equal seniority, the node that has seen more commands should win the election.

@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 import anyio
-import pytest
 from loguru import logger
 
 from exo.master.main import Master
@@ -40,7 +39,6 @@ from exo.shared.types.worker.shards import PipelineShardMetadata, Sharding
 from exo.utils.channels import channel
 
 
-@pytest.mark.asyncio
 async def test_master():
     keypair = get_node_id_keypair()
     node_id = NodeId(keypair.to_peer_id().to_base58())
